@@ -73,7 +73,6 @@ Source0: @PACKAGE@-%{version}.tar.gz
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 BuildRequires: glib2-devel >= 2.16
 BuildRequires: libattr-devel
-BuildRequires: mailx
 %if %{with_systemd}
 %if %{defined suse_version}
 BuildRequires: systemd-rpm-macros
@@ -122,6 +121,7 @@ Conflicts: robinhood-posix
 Provides: robinhood = %{version}-%{release}
 Obsoletes: robinhood-tmpfs < 3.0, robinhood-tmpfs-lustre < 3.0
 Obsoletes: robinhood-backup < 3.0, robinhood-lhsm < 3.0
+Requires: mailx
 %if %{with jemalloc}
 Requires: jemalloc
 %endif
@@ -142,6 +142,7 @@ Group: Applications/System
 Conflicts: robinhood-lustre
 Provides: robinhood = %{version}-%{release}
 Obsoletes: robinhood-tmpfs < 3.0, robinhood-tmpfs-posix < 3.0
+Requires: mailx
 %if %{with jemalloc}
 Requires: jemalloc
 %endif
@@ -186,7 +187,7 @@ Tools for MDS recovery.
 %package tests
 Summary: Test suite for Robinhood
 Group: Applications/System
-Requires: robinhood robinhood-adm bc
+Requires: robinhood robinhood-adm bc strace
 # mariadb or mysql
 Requires: /usr/bin/mysql
 Release: @RELEASE@
@@ -460,6 +461,15 @@ rm -rf $RPM_BUILD_ROOT
 %endif
 
 %changelog
+
+* Fri Apr 03 2020 Thomas Leibovici <thomas.leibovici@cea.fr> 3.1.6-1
+- Robinhood 3.1.6
+
+* Wed Mar 20 2019 Thomas Leibovici <thomas.leibovici@cea.fr> 3.1.5-1
+- Robinhood 3.1.5
+
+* Fri Sep 21 2018 Thomas Leibovici <thomas.leibovici@cea.fr> 3.1.4-1
+- Robinhood 3.1.4
 
 * Tue Sep 26 2017 Thomas Leibovici <thomas.leibovici@cea.fr> 3.1-1
 - Robinhood 3.1

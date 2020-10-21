@@ -4,7 +4,7 @@
 
 AC_PREREQ(2.59)
 
-AC_INIT( [robinhood], [3.1.3], [robinhood-support@lists.sourceforge.net])
+AC_INIT( [robinhood], [3.1.6], [robinhood-support@lists.sourceforge.net])
 RELEASE="1"
 
 AC_DEFINE_UNQUOTED(RELEASE, "$RELEASE", [release info])
@@ -137,9 +137,6 @@ AC_ARG_ENABLE( [data-version], AS_HELP_STRING([--disable-data-version],
                [Disable the use of llapi_get_data_version()]),
                [support_dv="$enableval"],[support_dv="yes"] )
 DV_CMD="stat -c %Y-%s"
-
-# program to be used for mailing
-AX_PROG_MAIL
 
 AC_ARG_ENABLE([common-rpms], AS_HELP_STRING([--disable-common-rpms],
               [Disable build of common RPMs, only build FS specific packages]),
@@ -487,6 +484,9 @@ AC_SUBST(SBINDIR)
 AS_AC_EXPAND(LIBDIR, $libdir)
 AC_SUBST(LIBDIR)
 
+if test "$ac_configure_args" = "" ; then
+    ac_configure_args="''"
+fi
 # for exporting to Makefile.in
 AC_SUBST(ac_configure_args)
 

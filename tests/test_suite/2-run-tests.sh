@@ -306,22 +306,32 @@ function clean_logs
 	done
 }
 
+function list_actions
+{
+    if [[ -n "$MDS" ]]; then
+        ssh $MDS lctl get_param -n 'mdt.lustre-*.hsm.actions' | \
+            egrep -v "SUCCEED|CANCELED"
+    else
+        lctl get_param -n 'mdt.lustre-*.hsm.actions' | \
+            egrep -v "SUCCEED|CANCELED"
+    fi
+}
+
+function count_actions
+{
+    list_actions | wc -l
+}
 
 function wait_done
 {
 	max_sec=$1
 	sec=0
-	if [[ -n "$MDS" ]]; then
-		cmd="ssh $MDS egrep -v \"SUCCEED|CANCELED\" /proc/fs/lustre/mdt/lustre-MDT0000/hsm/actions"
-	else
-		cmd="egrep -v SUCCEED|CANCELED /proc/fs/lustre/mdt/lustre-MDT0000/hsm/actions"
-	fi
 
-	action_count=`$cmd | wc -l`
+	action_count=$(count_actions)
 
 	if (( $action_count > 0 )); then
 		echo "Current actions:"
-		$cmd
+		list_actions
 
 		echo -n "Waiting for copy requests to end."
 		while (( $action_count > 0 )) ; do
@@ -329,9 +339,9 @@ function wait_done
 			sleep 1;
 			((sec=$sec+1))
 			(( $sec > $max_sec )) && return 1
-			action_count=`$cmd | wc -l`
+			action_count=$(count_actions)
 		done
-		$cmd
+		list_actions
 		echo " Done ($sec sec)"
 	fi
 
@@ -357,9 +367,9 @@ function clean_fs
 	if (( $is_lhsm != 0 )); then
 		echo "Cancelling agent actions..."
 		if [[ -n "$MDS" ]]; then
-			ssh $MDS "echo purge > /proc/fs/lustre/mdt/lustre-MDT0000/hsm_control"
+			ssh $MDS "lctl set_param mdt.lustre-*.hsm_control=purge"
 		else
-			echo "purge" > /proc/fs/lustre/mdt/lustre-MDT0000/hsm_control
+			lctl set_param "mdt.lustre-*.hsm_control=purge"
 		fi
 
 		echo "Waiting for end of data migration..."
@@ -1539,7 +1549,7 @@ function test_lhsm_remove
 
     clean_logs
 
-    local default_archive=$(cat /proc/fs/lustre/mdt/lustre-MDT0000/hsm/default_archive_id)
+    local default_archive=$(lctl get_param mdt.lustre-MDT0000.hsm.default_archive_id)
 
     # create nb_archive + 3 more files to test:
     # - hsm_archive with no option
@@ -3093,7 +3103,7 @@ function update_test
         # => must only update once
         while (( `date "+%s"` - $start < $event_updt_min - 2 )); do
             touch $RH_ROOT/file
-            usleep 10000
+            sleep 0.01
         done
 
         # force flushing log
@@ -3121,7 +3131,7 @@ function update_test
 
         # wait for 5s to be fully elapsed
         while (( `date "+%s"` - $start <= $event_updt_min )); do
-            usleep 100000
+            sleep 0.1
         done
     done
 
@@ -3143,9 +3153,9 @@ function update_test
         # => must only update once
         while (( `date "+%s"` - $start < $event_updt_min - 2 )); do
             mv $RH_ROOT/file $RH_ROOT/file.2
-            usleep 10000
+            sleep 0.01
             mv $RH_ROOT/file.2 $RH_ROOT/file
-            usleep 10000
+            sleep 0.01
         done
 
         # force flushing log
@@ -3910,6 +3920,9 @@ function test_copy
     echo 123 > $RH_ROOT/file.2
     echo 123 > $RH_ROOT/file.3
     echo 123 > $RH_ROOT/file.4
+    echo 123 > $RH_ROOT/file.5
+    mkdir $RH_ROOT/one_dir
+    ln -s "$RH_ROOT/one_dir" $RH_ROOT/one_link
 
     $RH -f $RBH_CFG_DIR/$config_file --scan --once -l DEBUG -L rh_scan.log || error "scan error"
     check_db_error rh_scan.log
@@ -3925,6 +3938,8 @@ function test_copy
     (( $(find $RH_ROOT/backup -name file.2 | wc -l) == 1 )) || error "file.2 backup not found"
     grep "Error applying action on entry $RH_ROOT/file.3" rh_migr.log || error "copy of file.3 should have failed"
     (( $(ls $RH_ROOT/backup/*/file.3 | wc -l) == 0 )) || error "no backup copy of file.3 expected"
+    grep "copy success for '$RH_ROOT/file.5', matching rule 'copy_link_to_dir'" rh_migr.log || error "no copy of file.5"
+    (( $(find $RH_ROOT/one_dir -name file.5 | wc -l) == 1 )) || error "file.5 backup not found"
 }
 
 # helper for test_move
@@ -4327,9 +4342,9 @@ function test_sched_ratelim
     done
 
     # Limit processing to 2 files and 100KB per second
-    export ratelim_capacity=2
-    export ratelim_size="100KB"
-    export ratelim_refill="1000"
+    export ratelim_capacity=1
+    export ratelim_size="50KB"
+    export ratelim_refill="500"
 
     # Initial scan
     echo "Initial scan..."
@@ -4358,8 +4373,8 @@ function test_sched_ratelim
     :> rh_migr.log
 
     # Limit processing to 10 files and 10KB per second
-    export ratelim_capacity=10
-    export ratelim_size="10KB"
+    export ratelim_capacity=5
+    export ratelim_size="5KB"
 
     # migrate 10K files, must be limited to 10K/sec (1 file)
     $RH -f $RBH_CFG_DIR/$config_file --run=migration \
@@ -4382,8 +4397,8 @@ function test_sched_ratelim
 
     :> rh_migr.log
     # test the behavior when files are larger than the size limit
-    export ratelim_capacity=10
-    export ratelim_size="1KB"
+    export ratelim_capacity=5
+    export ratelim_size="512"
 
     # migrate 10K files, must be limited to 10K/sec (1 file)
     $RH -f $RBH_CFG_DIR/$config_file --run=migration \
@@ -4393,7 +4408,7 @@ function test_sched_ratelim
     # (but not on count)
     grep "Throttling after $ratelim_capacity actions" rh_migr.log &&
         error "unexpected throttling on action count"
-    grep "Throttling after [0-9.]* KB" rh_migr.log ||
+    grep "Throttling after $ratelim_size" rh_migr.log ||
         error "expected throttling on size"
 
     grep "run summary" rh_migr.log || error "Found no policy run summary"
@@ -5336,13 +5351,17 @@ function wait_run_count
 {
     local log=$1
     local cnt=$2
+    local timeo=$3
 
     # wait for end of run
     while (( $(grep "End of current pass" $log | wc -l) < $cnt )); do
         echo "waiting end of pass..."
         sleep 1
+        ((timeo=$timeo - 1))
+        (($timeo == 0)) && return 1
         continue
     done
+    return 0
 }
 
 function test_periodic_trigger
@@ -5405,7 +5424,7 @@ function test_periodic_trigger
     clean_caches # blocks is cached
     # it first must have purged *.1 files (not others)
 
-    wait_run_count rh_purge.log 1
+    wait_run_count rh_purge.log 1 60 || error "pass timeout"
 
     # make sure the policy delay is not elapsed
     check_released "$RH_ROOT/file.1" || error "$RH_ROOT/file.1 should have been released after $delta s"
@@ -5425,7 +5444,7 @@ function test_periodic_trigger
     # now, *.2 must have been purged
     echo "3.2-checking trigger for second policy run..."
 
-    wait_run_count rh_purge.log 2
+    wait_run_count rh_purge.log 2 60 || error "pass timeout"
 
     t2=`date +%s`
     ((delta=$t2 - $t0))
@@ -5449,7 +5468,7 @@ function test_periodic_trigger
     # *.4 must be preserved
     echo "3.3-checking trigger for third policy..."
 
-    wait_run_count rh_purge.log 3
+    wait_run_count rh_purge.log 3 60 || error "pass timeout"
     t3=`date +%s`
     ((delta=$t3 - $t0))
 
@@ -6999,15 +7018,15 @@ function test_diff_apply_fs # test diff --apply=fs in particular for entry recov
     # copy 2 instances /bin in the filesystem
     echo "Populating filesystem..."
     $LFS setstripe -c 2 $RH_ROOT/.
-    cp -ar /bin $RH_ROOT/bin.1 || error "copy failed"
-    cp -ar /bin $RH_ROOT/bin.2 || error "copy failed"
+    cp -ar . $RH_ROOT/bin.1 || error "copy failed"
+    cp -ar . $RH_ROOT/bin.2 || error "copy failed"
 
     # run initial scan
     echo "Initial scan..."
     $RH -f $RBH_CFG_DIR/$config_file --scan --once -l EVENT -L rh_scan.log  || error "performing initial scan"
 
     # save contents of bin.1
-    find $RH_ROOT/bin.1 -printf "%n %y %m %T@ %g %u %p %l\n" > find.out || error "find error"
+    find $RH_ROOT/bin.1 -printf "%n %y %m %T@ %g %u %p %l\n" | sort -k 7 > find.out || error "find error"
 
     # remove it
     echo "removing objects"
@@ -7018,21 +7037,27 @@ function test_diff_apply_fs # test diff --apply=fs in particular for entry recov
     sleep 1
 
     echo "running recovery..."
-    strace -f $DIFF -f $RBH_CFG_DIR/$config_file --apply=fs > diff.out 2> diff.log || error "rbh-diff error"
+    # clear umask for recovery
+    old_umask=$(umask)
+    umask 0000
+    strace -e open,mkdir -f $DIFF -f $RBH_CFG_DIR/$config_file --apply=fs > diff.out 2> diff.log || error "rbh-diff error"
+    umask "$old_umask"
 
     cr1=$(grep -E '^\+\+[^+]' diff.out | wc -l)
-    cr2=$(grep -E 'create|mkdir' diff.log | wc -l)
+    # recursive directory creation for files returns EEXIST, don't count it
+    cr2=$(grep -v EEXIST diff.log | grep -E "O_CREAT|mkdir" | wc -l)
     cr3=$(wc -l find.out | awk '{print $1}')
+    echo "diff would create $cr1 entries, $cr2 entries created, $cr3 entries initially in directory"
     rmhl=0
     if (($cr1 != $cr2)) || (($cr1 != $cr3)); then
         miss=0
         for h in $(grep "type=file" diff.out | grep -E "nlink=[^1]"| sed -e "s/.*nlink=\([0-9]*\),.*/\1/"); do
             ((miss=$h-1+$miss))
         done
-        echo "detected $miss missing hardlinks"
+        (( $miss > 0 )) && echo "detected $miss missing hardlinks"
         rmhl=1
         if (($cr3 == $cr1 + $miss)); then
-            echo "WARNING: $miss hardlinks not restored"
+            (( $miss > 0 )) && echo "WARNING: $miss hardlinks not restored"
         else
             error "Unexpected number of objects created: rbh-diff displayed $cr1, rbh-diff log indicates $cr2, expected $cr3 according to find"
         fi
@@ -7040,7 +7065,7 @@ function test_diff_apply_fs # test diff --apply=fs in particular for entry recov
         echo "OK: $cr1 objects created"
     fi
 
-    find $RH_ROOT/bin.1 -printf "%n %y %m %T@ %g %u %p %l\n" > find2.out || error "find error"
+    find $RH_ROOT/bin.1 -printf "%n %y %m %T@ %g %u %p %l\n" | sort -k 7 > find2.out || error "find error"
 
     if (($rmhl == 1)); then
         # remove file hardlinks from diff as their are erroneous
@@ -7061,7 +7086,7 @@ function test_diff_apply_fs # test diff --apply=fs in particular for entry recov
     diff find.out find2.out || error "unexpected differences between initial and final state"
 
 
-    lvers=$(cat /proc/fs/lustre/version | grep "lustre:" | awk '{print $2}' | cut -d '.' -f 1,2)
+    lvers=$(lustre_version | cut -d '.' -f 1,2)
     if [[ "$lvers" == "2.1" ]]; then
         # lovea and fid_remap must have been generated for newly created files
         [[ -f lovea ]] || error "lovea not generated"
@@ -10058,6 +10083,51 @@ function test_hsm_invalidate
     return 0
 }
 
+function test_hsm_remove_order
+{
+    if [[ $is_lhsm == 0 ]] ; then
+        echo "Lustre/HSM test only: skipped"
+        set_skipped
+        return 1
+    fi
+
+    config_file=$1
+    my_log_file=rh_hsm_remove.log
+    rm -f $my_log_file
+
+    # test_hsm_remove_noorder.conf
+    # test_hsm_remove_order.conf
+
+    # need full scan first, even if FS is empty
+    $RH -f $RBH_CFG_DIR/$config_file --scan --once 2>&1 > /dev/null
+
+    # run hsm_remove
+    $RH -f $RBH_CFG_DIR/$config_file --run=lhsm_remove -O -l FULL -L $my_log_file 2>&1 > /dev/null
+
+    grep "SELECT" $my_log_file | grep "SOFT_RM" | grep "ORDER BY" > /dev/null
+    ORDERRC=$?
+    rm -f $my_log_file
+
+    echo "$config_file" | grep "noorder" > /dev/null
+    CFGRC=$?
+
+    if [[ ${CFGRC} -eq 0 ]] && [[ ${ORDERRC} -ne 0 ]] ; then
+        # OK
+        return 0
+    elif [[ ${CFGRC} -ne 0 ]] && [[ ${ORDERRC} -eq 0 ]] ; then
+        # OK
+        return 0
+    elif [[ ${CFGRC} -eq 0 ]] && [[ ${ORDERRC} -eq 0 ]] ; then
+      # error
+        error "Unexpected ORDER BY found in SOFT_RM select"
+    else
+      # error
+        error "ORDER BY not found in SOFT_RM select"
+    fi
+
+    return 0
+}
+
 function test_multirule_select
 {
     # test doesnt work for POSIX as there are harcoded /mnt/lustre path in
@@ -12855,9 +12925,9 @@ function TEST_OTHER_PARAMETERS_2
     # count the number of "STATS" dump
     nb_Stats=$(get_nb_stat rh_migr.log)
 
-    local stime=$(echo "5500000-(1000000*($t1-$t0))"| bc -l)
-    echo "Sleep $stime useconds"
-    usleep $stime
+    local stime=$(echo "5.5-($t1-$t0)"| bc -l)
+    echo "Sleep $stime seconds"
+    sleep $stime
 
     # count the number of "STATS" dump
     nb_Stats2=$(get_nb_stat rh_migr.log)
@@ -13431,6 +13501,8 @@ run_test 243   test_iname       test_iname.conf "test iname criterion"
 run_test 244   test_copy        test_copy.conf "test common.copy specific parameters"
 run_test 245   test_move        test_move.conf "test trash policy based on common.move"
 run_test 246   test_hsm_invalidate test_hsm_invalidate.conf "HSM invalidate deleted files"
+run_test 247a   test_hsm_remove_order  test_hsm_remove_order.conf "hsm_remove default order by"
+run_test 247b   test_hsm_remove_order  test_hsm_remove_noorder.conf "hsm_remove override order by"
 
 #### triggers ####
 

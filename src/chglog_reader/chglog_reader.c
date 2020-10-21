@@ -783,6 +783,47 @@ static const struct {
     [CL_RMDIR] = { IGNORE_CANCEL, 1<<CL_MKDIR },
 };
 
+#ifdef _LUSTRE_HSM
+/* Special case for CL records is reserved to HSM
+ *
+ */
+static bool can_ignore_hsm_record(reader_thr_info_t *p_info,
+                              const CL_REC_TYPE *logrec_in)
+{
+    entry_proc_op_t *op, *t1;
+    struct id_hash_slot *slot;
+    char flag_buff[256] = "";
+
+    slot = get_hash_slot(p_info->id_hash, &logrec_in->cr_tfid);
+    rh_list_for_each_entry_safe_reverse(op, t1, &slot->list, id_hash_list) {
+        CL_REC_TYPE *logrec = op->extra_info.log_record.p_log_rec;
+
+        /* fid not matching, check next records */
+        if (!entry_id_equal(&logrec->cr_tfid, &logrec_in->cr_tfid))
+            continue;
+
+        DisplayLog(LVL_FULL, CHGLOG_TAG,
+                   "    checking against previous HSM record "CL_BASE_FORMAT,
+                   CL_BASE_ARG(p_info->mdtdevice, logrec));
+        if (hsm_get_cl_event(logrec->cr_flags) == HE_STATE) {
+            DisplayLog(LVL_FULL, CHGLOG_TAG,
+                       "    removing previous HSM record "CL_BASE_FORMAT,
+                       CL_BASE_ARG(p_info->mdtdevice, logrec));
+            /* free and remove previous record */
+            rh_list_del(&op->list);
+            rh_list_del(&op->id_hash_list);
+            p_info->op_queue_count--;
+            EntryProcessor_Release(op);
+            /* removed record was previously counted as interesting */
+            p_info->interesting_records--;
+
+            return false;
+        }
+    }
+    return false;
+}
+#endif
+
 /* Decides whether a new changelog record can be ignored. Ignoring a
  * record should not impact the database state, however the gain is to:
  *  - reduce contention on pipeline stages with constraints,
@@ -797,6 +838,13 @@ static bool can_ignore_record(reader_thr_info_t *p_info,
     unsigned int ignore_mask;
     struct id_hash_slot *slot;
     char flag_buff[256] = "";
+
+#ifdef _LUSTRE_HSM
+    // Function for handling duplicate HSM events
+    if (logrec_in->cr_type == CL_HSM) {
+        return can_ignore_hsm_record(p_info, logrec_in);
+    }
+#endif
 
     if (record_filters[logrec_in->cr_type].ignore == IGNORE_NEVER)
         return false;
@@ -1240,9 +1288,15 @@ static cl_status_e cl_get_one(reader_thr_info_t *info, CL_REC_TYPE **pp_rec)
         info->nb_read++;
         return cl_ok;
 
+    case -EINTR:
+        DisplayLog(LVL_EVENT, CHGLOG_TAG,
+                   "llapi_changelog_recv() interrupted. Retrying.");
+        return cl_continue;
+
     case 1:    /* EOF */
     case -EINVAL:  /* FS unmounted */
     case -EPROTO:  /* error in KUC channel */
+    default:
 
         /* warn if it is an error */
         if (rc != 1)
@@ -1276,26 +1330,13 @@ static cl_status_e cl_get_one(reader_thr_info_t *info, CL_REC_TYPE **pp_rec)
         if (rc) {
             /* will try to recover from this error */
             rh_sleep(1);
+            DisplayLog(LVL_EVENT, CHGLOG_TAG,
+                       "Error reopening changelog "
+                       "will try again soon: %d - %s", rc, strerror(-rc));
         }
 
         return cl_continue;
-
-    case -EINTR:
-        DisplayLog(LVL_EVENT, CHGLOG_TAG,
-                   "llapi_changelog_recv() interrupted. Retrying.");
-        return cl_continue;
-
-    default:
-        DisplayLog(LVL_CRIT, CHGLOG_TAG,
-                   "Error in llapi_changelog_recv(): %d: %s",
-                   rc, strerror(abs(rc)));
-
-        /* will try to recover from this error */
-        rh_sleep(1);
-
-        return cl_continue;
     }
-
     /* Unreachable */
     return cl_continue;
 }

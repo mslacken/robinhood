@@ -23,6 +23,10 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/xattr.h>
+<<<<<<< HEAD
+=======
+#include <errno.h>
+>>>>>>> 1ca39f131bb35f120f458faf4e70779d5621e8cd
 #include <stdlib.h>
 #include <sys/param.h>
 #include <search.h>

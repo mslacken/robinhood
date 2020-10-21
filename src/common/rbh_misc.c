@@ -302,19 +302,26 @@ const entry_id_t *get_root_id(void)
  */
 int SendMail(const char *recipient, const char *subject, const char *message)
 {
-    char buffer[MAIL_TITLE_MAX];
-    FILE *fichier;
+    char *buffer;
+    FILE *file;
 
-    snprintf(buffer, MAIL_TITLE_MAX, MAIL " -s \"%s\" %s", subject, recipient);
+    if (asprintf(&buffer, "mailx -s \"%s\" %s", subject, recipient) == -1) {
+        DisplayLog(LVL_CRIT, "SENDMAIL",
+                   "Could not allocate title buffer for \"%s\"", subject);
+        return -1;
+    }
 
-    if ((fichier = popen(buffer, "w")) == NULL) {
+    if ((file = popen(buffer, "w")) == NULL) {
         DisplayLog(LVL_CRIT, "SENDMAIL",
                    "Error %d sending mail with the following command=%s", errno,
                    buffer);
+        free(buffer);
         return -1;
     }
-    fwrite(message, strlen(message), 1, fichier);
-    pclose(fichier);
+
+    fwrite(message, strlen(message), 1, file);
+    free(buffer);
+    pclose(file);
     return 0;
 }
 
@@ -2208,6 +2215,8 @@ int mkdir_recurse(const char *full_path, mode_t mode, entry_id_t *dir_id)
     curr++;
 
     while ((curr = strchr(curr, '/')) != NULL) {
+        struct stat st;
+
         /* if fullpath = '/a/b',
          * curr = &(fullpath[2]);
          * so, copy 2 chars to get '/a'.
@@ -2218,12 +2227,20 @@ int mkdir_recurse(const char *full_path, mode_t mode, entry_id_t *dir_id)
         /* extract directory name */
         rh_strncpy(path_copy, full_path, path_len);
 
-        DisplayLog(LVL_FULL, MKDIR_TAG, "mkdir(%s)", path_copy);
-        if ((mkdir(path_copy, mode) != 0) && (errno != EEXIST)) {
-            rc = -errno;
-            DisplayLog(LVL_CRIT, MKDIR_TAG, "mkdir(%s) failed: %s",
-                       path_copy, strerror(-rc));
-            return rc;
+        /* Check if the target location exists before
+         * creating the directory.
+         * If the target is not a directory, the copy
+         * will fail anyhow with the appropriate error. */
+        if (lstat(path_copy, &st) != 0 && errno == ENOENT) {
+            DisplayLog(LVL_FULL, MKDIR_TAG, "mkdir(%s)", path_copy);
+            /* Test EEXIST because the directory may have been crated by
+             * another thread in the meantime. */
+            if (mkdir(path_copy, mode) != 0 && errno != EEXIST) {
+                rc = -errno;
+                DisplayLog(LVL_CRIT, MKDIR_TAG, "mkdir(%s) failed: %s",
+                           path_copy, strerror(-rc));
+                return rc;
+            }
         }
 
         curr++;
