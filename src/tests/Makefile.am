@@ -7,9 +7,9 @@ AM_LDFLAGS= -lpthread
 #EXTRA_DIST = my-project.supp
 
 check_PROGRAMS=test_uidgidcache test_params \
-    test_confparam test_parse
+    test_parse
 if LUSTRE
-check_PROGRAMS+=create_nostripe test_forcestripe
+check_PROGRAMS+=create_nostripe test_forcestripe test_confparam 
 endif
 TESTS=test_parsing.sh test_uidgidcache test_params test_confparam
 
